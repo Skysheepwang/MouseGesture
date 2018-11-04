@@ -7,24 +7,80 @@ include         gdi32.inc
 includelib      gdi32.lib
 include         user32.inc
 includelib      user32.lib
-include			kernel32.inc
+include         kernel32.inc
 includelib      kernel32.lib
+include         masm32.inc
+includelib      masm32.lib
+include         msvcrt.inc
+includelib      msvcrt.lib
+include         action.inc
+include         shell32.inc
+includelib      shell32.lib
 
 .data
-saveButton      DWORD   ?
 hgWindow        DWORD   ?
+hDesktop        DWORD   ?
 keyHook         DWORD   ?
 mouseHook       DWORD   ?
 
-clickTestText   BYTE    'Time0', 0
+keyHooked       DWORD   0
+
 ListItem        BYTE    256 dup(?)
+MsgTitle        BYTE    100 dup(?)
+MsgText         BYTE    200 dup(?)
+data            BYTE    256 dup(0)
 
-operationIndexes    DWORD   0, 1, 2, 3, 4, 5, 6, 7
+ghInstance      DWORD   ?
 
-.const
+itemSelected    BYTE    "Selected operation No.%d for gesture No.%d", 0
+trackans        BYTE    "lastTrack是%d, 执行第%d个操作", 0
+pressans        BYTE    "lastTrack是%d, 按键%d", 0
+selectedDetail  BYTE    "已变更操作“%s”为执行“%s”", 0
+showOperation   BYTE    "%s",0
 
 numGestures     =       8
 numOperations   =       21
+operationIndexes    DWORD   0, 1, 2, 3, 4, 5, 6, 7
+saveButton      DWORD   numGestures dup(?)
+hWndComboBox    DWORD   numGestures dup(?)
+operationKey    DWORD   numGestures dup(0)
+nowKeyInputIndex    DWORD   -1
+
+tracking        DWORD   0
+tracks          DWORD   10 dup(?)
+trackNum        DWORD   0
+lastTrack       DWORD   -1
+lastX           DWORD   0
+lastY           DWORD   0
+oldX            DWORD   -1
+oldY            DWORD   -1
+
+; action list
+ActionList      DWORD   OFFSET copy, OFFSET paste, OFFSET Win, OFFSET AltTab, OFFSET WinTab,
+                        OFFSET WinD, OFFSET WinUp, OFFSET WinDown, OFFSET WinLeft, OFFSET WinRight,
+                        OFFSET AltLeft, OFFSET AltRight, OFFSET mute2, OFFSET soundUp2, OFFSET soundDown2,
+                        OFFSET ControlPanel, OFFSET TaskManager, OFFSET NotePad, OFFSET Calculator, OFFSET WebSearchAuto,
+                        OFFSET PressKeys ; need to do the acc keys
+; end of action list
+
+settingFileHandle DWORD ?
+byteWritten 	  DWORD ?
+byteRead 		  DWORD ?
+numBytesToWrite   DWORD ?
+numBytesToRead 	  DWORD ?
+
+hMenu DWORD ?
+hSubMenu DWORD ?
+
+.const
+
+; Records base key in lower 2bytes
+; 1<<31 for Ctrl, 30 for Alt, 29 for Shift, 28/27 for Win
+CONTROL_ADDER   DWORD   80000000h
+ALT_ADDER       DWORD   40000000h
+SHIFT_ADDER     DWORD   20000000h
+LWIN_ADDER      DWORD   10000000h
+RWIN_ADDER      DWORD   08000000h
 
 Planets00       BYTE    '复制', 0
 Planets01       BYTE    '粘贴', 0
@@ -46,7 +102,7 @@ Planets16       BYTE    '任务管理器', 0
 Planets17       BYTE    '记事本', 0
 Planets18       BYTE    '计算器', 0
 Planets19       BYTE    '默认浏览器中搜索', 0
-Planets20       BYTE    '默认浏览器中搜索2', 0
+Planets20       BYTE    '自定义按键', 0
 
 Planets         DWORD   Planets00, Planets01, Planets02, Planets03, Planets04,
                         Planets05, Planets06, Planets07, Planets08, Planets09,
@@ -66,6 +122,15 @@ GestureNames07  BYTE    '右-上', 0
 GestureNames    DWORD   GestureNames00, GestureNames01, GestureNames02, GestureNames03, GestureNames04,
                         GestureNames05, GestureNames06, GestureNames07
 
+GestureLeft     DWORD   0
+GestureRight    DWORD   1
+GestureUp       DWORD   2
+GestureDown     DWORD   3
+GestureLeftDown DWORD   4
+GestureLeftUp   DWORD   5
+GestureRightDown DWORD  6
+GestureRightUp  DWORD   7
+
 errorInfoText   BYTE    '窗口注册失败！', 0
 errorInfoText2  BYTE    '窗口创建失败！', 0
 errorInfoTitle  BYTE    '错误', 0
@@ -73,32 +138,896 @@ errorInfoTitle  BYTE    '错误', 0
 comboHMenuBase  =       5000
 staticTypeName  BYTE    'STATIC', 0
 comboTypeName   BYTE    'COMBOBOX', 0
+inputedString   BYTE    "正在录入快捷键……", 0
 comboBaseXPos   =       100
 comboBaseYPos   =       35
 comboWidth      =       160
 comboHeight     =       20 * numOperations
 settingAdder    =       30
 
-windowClassName BYTE    'myWindowClass', 0
-windowName      BYTE    'MouseGesture', 0
-windowWidth     =       comboBaseXPos + comboWidth + 80
-windowHeight    =       comboBaseYPos + settingAdder * numGestures + 120
-
-buttonTypeName  BYTE    'BUTTON', 0
-buttonText      BYTE    '保存', 0
+buttonTypeName  BYTE    "BUTTON", 0
+buttonText      BYTE    "录入快捷键", 0
 buttonWidth     =       80
 buttonHeight    =       25
-buttonPosX      =       windowWidth - buttonWidth - 80
-buttonPosY      =       windowHeight - buttonHeight - 75
-buttonHMenu     =       8
+
+cannotMsgTitle  BYTE    "暂时不能录入", 0
+cannotMsgText   BYTE    "请先结束已有录入任务", 0
+confirmText     BYTE    "确认快捷键", 0
+
+windowClassName BYTE    'myWindowClass', 0
+windowName      BYTE    'MouseGesture', 0
+windowWidth     =       comboBaseXPos + comboWidth + buttonWidth + 90
+windowHeight    =       comboBaseYPos + settingAdder * numGestures + 90
+
+buttonBaseXPos  =       comboBaseXPos + comboWidth + 20
+buttonBaseYPos  =       comboBaseYPos
+buttonHMenuBase =       4000
 
 nullText        BYTE    0
 
+CtrlPlus        BYTE    "Ctrl+", 0
+AltPlus         BYTE    "Alt+", 0
+ShiftPlus       BYTE    "Shift+", 0
+WinPlus         BYTE    "Win+", 0
+CharOut         BYTE    "%c", 0
+IntOut          BYTE    "%d", 0
+FKeyOut         BYTE    "F%d", 0
+InsertKey       BYTE    "Insert", 0
+PageUpKey       BYTE    "PageUp", 0
+PageDownKey     BYTE    "PageDown", 0
+LeftKey         BYTE    "Left", 0
+RightKey        BYTE    "Right", 0
+UpKey           BYTE    "Up", 0
+DownKey         BYTE    "Down", 0
+EscKey          BYTE    "Esc", 0
+SpaceKey        BYTE    "Space", 0
+ReturnKey       BYTE    "Return", 0
+TabKey          BYTE    "Tab", 0
+BackSpaceKey    BYTE    "BackSpace", 0
+DeleteKey       BYTE    "Delete", 0
+
+arg_ControlPanel_1 BYTE "control",0
+arg_TaskManager_1 BYTE "open",0
+arg_TaskManager_2 BYTE "taskmgr",0
+arg_TaskManager_3 BYTE 0
+arg_NotePad_1 BYTE "notepad",0
+arg_Calculator_1 BYTE "calc",0
+arg_WebSearchText_1 BYTE "%s%s",0
+arg_WebSearchText_2 BYTE "https://www.baidu.com/s?wd=",0
+arg_WebSearchText_3 BYTE "open",0
+arg_WebSearchText_4 BYTE 0
+arg_WebSearchText_url BYTE 0
+
+settingFilename BYTE "settings", 0
+subMenuName BYTE "File", 0
+openItemName BYTE "Open", 0
+saveItemName BYTE "Save", 0
+IDR_MY_MENU DWORD 1
+IDM_FILE = 100
+IDM_OPEN = 101
+IDM_SAVE = 102
+
 .code
 
-_ProcWinMain    proc    uses ebx, hWnd, uMsg, wParam, lParam
+RGB MACRO red, green, blue
+    xor eax, eax
+    mov ah, blue    ; blue
+    mov al, green   ; green
+    rol eax, 8
+    mov al, red     ; red
+ENDM
+
+; ==========================================================
+OneKeyAction PROC STDCALL,
+    key:BYTE, 
+    dwFlags:DWORD
+; requires: key to invoke and dwFlags
+;===========================================================
+    invoke keybd_event, key, 0, dwFlags, 0
+    mov eax, dwFlags
+    or eax, KEYEVENTF_KEYUP
+	invoke keybd_event, key, 0, eax , 0
+    ret
+OneKeyAction ENDP
+
+
+; ==========================================================
+TwoKeysAction PROC STDCALL,
+    key1:BYTE, 
+    dwFlags1:DWORD,
+    key2:BYTE, 
+    dwFlags2:DWORD
+; requires: two keys key1 and key2 and their dwFlags
+; ==========================================================
+    invoke keybd_event, key1, 0, dwFlags1, 0
+    invoke keybd_event, key2, 0, dwFlags2, 0
+    invoke Sleep, KEYDOWNTIME
+    mov eax, dwFlags1
+    or eax, KEYEVENTF_KEYUP
+    invoke keybd_event, key1, 0, eax, 0
+    mov eax, dwFlags2
+    or eax, KEYEVENTF_KEYUP
+	invoke keybd_event, key2, 0, eax, 0
+    ret
+TwoKeysAction ENDP 
+
+PressKeys       PROC uses ebx
+                local keyinfo: DWORD
+
+                mov     eax, lastTrack
+                .if     eax < numGestures
+                        mov     ebx, 4
+                        mul     ebx
+                        mov     eax, operationKey[eax]
+                        mov     keyinfo, eax
+                                mov     ebx, keyinfo
+                                and     ebx, 255
+								invoke	crt_sprintf, OFFSET data, OFFSET pressans, lastTrack, ebx
+
+								invoke  MessageBox, hgWindow, OFFSET data, OFFSET data, MB_OK
+                        ; check control
+                        mov     eax, keyinfo
+                        and     eax, CONTROL_ADDER
+                        .if     eax != 0
+                                invoke keybd_event, VK_CONTROL, 0, 0, 0
+                        .endif
+                        ; check ALT
+                        mov     eax, keyinfo
+                        and     eax, ALT_ADDER
+                        .if     eax != 0
+                                invoke keybd_event, VK_MENU, 0, 0, 0
+                        .endif
+                        ; check SHIFT
+                        mov     eax, keyinfo
+                        and     eax, SHIFT_ADDER
+                        .if     eax != 0
+                                invoke keybd_event, VK_SHIFT, 0, 0, 0
+                        .endif
+                        ; check lwin
+                        mov     eax, keyinfo
+                        and     eax, LWIN_ADDER
+                        .if     eax != 0
+                                invoke keybd_event, VK_LWIN, 0, 0, 0
+                        .endif
+                        ; check RWIN
+                        mov     eax, keyinfo
+                        and     eax, RWIN_ADDER
+                        .if     eax != 0
+                                invoke keybd_event, VK_RWIN, 0, 0, 0
+                        .endif
+                        ; press normal key
+                        mov     eax, keyinfo
+                        and     eax, 08000000h - 1
+                        .if     eax != 0
+                                invoke keybd_event, eax, 0, 0, 0
+                        .endif
+                        
+                        invoke Sleep, KEYDOWNTIME
+                        
+                        mov     eax, keyinfo
+                        and     eax, 08000000h - 1
+                        .if     eax != 0
+                                invoke keybd_event, eax, 0, KEYEVENTF_KEYUP, 0
+                        .endif
+
+                        mov     eax, keyinfo
+                        and     eax, RWIN_ADDER
+                        .if     eax != 0
+                                invoke keybd_event, VK_RWIN, 0, KEYEVENTF_KEYUP, 0
+                        .endif
+                        mov     eax, keyinfo
+                        and     eax, LWIN_ADDER
+                        .if     eax != 0
+                                invoke keybd_event, VK_LWIN, 0, KEYEVENTF_KEYUP, 0
+                        .endif
+                        mov     eax, keyinfo
+                        and     eax, SHIFT_ADDER
+                        .if     eax != 0
+                                invoke keybd_event, VK_SHIFT, 0, KEYEVENTF_KEYUP, 0
+                        .endif
+                        mov     eax, keyinfo
+                        and     eax, ALT_ADDER
+                        .if     eax != 0
+                                invoke keybd_event, VK_MENU, 0, KEYEVENTF_KEYUP, 0
+                        .endif
+                        mov     eax, keyinfo
+                        and     eax, CONTROL_ADDER
+                        .if     eax != 0
+                                invoke keybd_event, VK_CONTROL, 0, KEYEVENTF_KEYUP, 0
+                        .endif
+                .endif
+                ret
+PressKeys       ENDP
+
+; ==========================================================
+copy PROC STDCALL
+; requires: none
+; ==========================================================
+    invoke TwoKeysAction, VK_CONTROL, 0, 43h, 0
+    ret
+copy ENDP
+
+
+; ==========================================================
+paste PROC STDCALL
+; requires: none
+; ==========================================================
+    invoke TwoKeysAction, VK_CONTROL, 0, 56h, 0
+    ret
+paste ENDP
+
+
+; ==========================================================
+Win PROC STDCALL
+; requires: none
+; ==========================================================
+    invoke OneKeyAction, VK_LWIN, 0
+    ret
+Win ENDP
+
+
+; ==========================================================
+AltTab PROC STDCALL
+; requires: none
+; ==========================================================
+    invoke TwoKeysAction, VK_MENU, 0, VK_TAB, 0
+    ret
+AltTab ENDP
+
+
+; ==========================================================
+WinTab PROC STDCALL
+; requires: none
+; ==========================================================
+    invoke TwoKeysAction, VK_LWIN, 0, VK_TAB, 0
+    ret
+WinTab ENDP
+
+
+; ==========================================================
+WinD PROC STDCALL
+; requires: none
+; ==========================================================
+    invoke TwoKeysAction, VK_LWIN, 0, 44h, 0
+    ret
+WinD ENDP
+
+
+; ==========================================================
+WinUp PROC STDCALL
+; requires: none
+; ==========================================================
+    invoke TwoKeysAction, VK_LWIN, 0, VK_UP, 0
+    ret
+WinUp ENDP
+
+
+; ==========================================================
+WinDown PROC STDCALL
+; requires: none
+; ==========================================================
+    invoke TwoKeysAction, VK_LWIN, 0, VK_DOWN, 0
+    ret
+WinDown ENDP
+
+
+; ==========================================================
+WinLeft PROC STDCALL
+; requires: none
+; ==========================================================
+    invoke TwoKeysAction, VK_LWIN, 0, VK_LEFT, 0
+    ret
+WinLeft ENDP
+
+
+; ==========================================================
+WinRight PROC STDCALL
+; requires: none
+; ==========================================================
+    invoke TwoKeysAction, VK_LWIN, 0, VK_RIGHT, 0
+    ret
+WinRight ENDP
+
+
+; ==========================================================
+AltLeft PROC STDCALL
+; requires: none
+; ==========================================================
+    invoke TwoKeysAction, VK_MENU, 0, VK_LEFT, 0
+    ret
+AltLeft ENDP
+
+
+; ==========================================================
+AltRight PROC STDCALL
+; requires: none
+; ==========================================================
+    invoke TwoKeysAction, VK_MENU, 0, VK_RIGHT, 0
+    ret
+AltRight ENDP
+
+
+; ==========================================================
+mute PROC STDCALL,
+    hgWnd:DWORD
+; requires: hgWnd:HWND
+; ==========================================================
+    invoke SendMessage, hgWnd, WM_APPCOMMAND, 200eb0h, APPCOMMAND_VOLUME_MUTE * 10000h
+    ret
+mute ENDP
+
+
+; ==========================================================
+soundUp PROC STDCALL,
+    hgWnd:DWORD
+; requires: hgWnd:HWND
+; ==========================================================
+    invoke SendMessage, hgWnd, WM_APPCOMMAND, 30292h, APPCOMMAND_VOLUME_UP * 10000h
+    ret
+soundUp ENDP
+
+
+; ==========================================================
+soundDown PROC STDCALL,
+    hgWnd:DWORD
+; requires: hgWnd:HWND
+; ==========================================================
+    invoke SendMessage, hgWnd, WM_APPCOMMAND, 30292h, APPCOMMAND_VOLUME_DOWN * 10000h
+    ret
+soundDown ENDP
+
+
+; ==========================================================
+mute2 PROC STDCALL
+; requires: none
+; ==========================================================
+    invoke SendMessage, hgWindow, WM_APPCOMMAND, 200eb0h, APPCOMMAND_VOLUME_MUTE * 10000h
+    ret
+mute2 ENDP
+
+
+; ==========================================================
+soundUp2 PROC STDCALL
+; requires: none
+; ==========================================================
+    invoke SendMessage, hgWindow, WM_APPCOMMAND, 30292h, APPCOMMAND_VOLUME_UP * 10000h
+    ret
+soundUp2 ENDP
+
+
+; ==========================================================
+soundDown2 PROC STDCALL
+; requires: none
+; ==========================================================
+    invoke SendMessage, hgWindow, WM_APPCOMMAND, 30292h, APPCOMMAND_VOLUME_DOWN * 10000h
+    ret
+soundDown2 ENDP
+
+
+; ==========================================================
+ControlPanel PROC STDCALL
+; requires: none
+; ==========================================================
+    invoke WinExec, offset arg_ControlPanel_1, SW_HIDE
+    ret
+ControlPanel ENDP
+
+
+; ==========================================================
+TaskManager PROC STDCALL
+; requires: none
+; ==========================================================
+    invoke ShellExecuteA, 0, offset arg_TaskManager_1, offset arg_TaskManager_2, offset arg_TaskManager_3, offset arg_TaskManager_3, SW_SHOW
+    ret
+TaskManager ENDP
+
+
+; ==========================================================
+NotePad PROC STDCALL
+; requires: none
+; ==========================================================
+    invoke WinExec, offset arg_NotePad_1, SW_SHOW
+    ret
+NotePad ENDP
+
+
+; ==========================================================
+Calculator PROC STDCALL
+; requires: none
+; ==========================================================
+    invoke WinExec, offset arg_Calculator_1, SW_SHOW
+    ret
+Calculator ENDP
+
+
+; ==========================================================
+WebSearchText PROC STDCALL,
+    text:PTR BYTE
+    LOCAL sz:DWORD
+; requires: none
+; ==========================================================
+    invoke crt_strlen, text
+    mov sz, eax 
+    invoke crt_sprintf, offset arg_WebSearchText_url, offset arg_WebSearchText_1, offset arg_WebSearchText_2, text
+    invoke ShellExecuteA, 0, offset arg_WebSearchText_3, offset arg_WebSearchText_url, offset arg_WebSearchText_4, offset arg_WebSearchText_4, SW_SHOW
+    ret
+WebSearchText ENDP
+
+
+; ==========================================================
+WebSearchAuto PROC STDCALL
+    LOCAL hMem:DWORD, lpStr:PTR BYTE
+; requires: none
+; ==========================================================
+    invoke copy
+    invoke OpenClipboard,0
+    .IF eax != 0
+        invoke GetClipboardData,CF_TEXT
+        mov hMem,eax
+        .IF hMem != 0
+            invoke GlobalLock, hMem
+            mov lpStr,eax
+            .IF lpStr != 0
+                invoke WebSearchText,lpStr
+                invoke GlobalUnlock,hMem
+                invoke EmptyClipboard
+            .ENDIF
+        .ENDIF
+        invoke CloseClipboard
+    .ENDIF
+    ret
+WebSearchAuto ENDP
+
+WriteToFile PROC
+	mov eax, numGestures
+	shl eax, 2
+	mov numBytesToWrite, eax
+	
+	INVOKE CreateFile,
+		ADDR settingFilename,
+		GENERIC_WRITE,
+		0,
+		NULL,
+		CREATE_ALWAYS,
+		FILE_ATTRIBUTE_NORMAL,
+		0
+		
+	mov settingFileHandle, eax
+	
+	INVOKE WriteFile,
+		settingFileHandle,
+		ADDR operationKey,
+		numBytesToWrite,
+		ADDR byteWritten,
+		0
+	INVOKE WriteFile,
+		settingFileHandle,
+		ADDR operationIndexes,
+		numBytesToWrite,
+		ADDR byteWritten,
+		0
+		
+	ret
+WriteToFile ENDP
+
+LoadFromFile PROC
+	mov eax, numGestures
+	shl eax, 2
+	mov numBytesToRead, eax
+	
+	INVOKE CreateFile,
+		ADDR settingFilename,
+		GENERIC_READ,
+		0,
+		NULL,
+		OPEN_EXISTING,
+		FILE_ATTRIBUTE_NORMAL,
+		0
+	
+	mov settingFileHandle, eax
+	
+	INVOKE ReadFile,
+		settingFileHandle,
+		ADDR operationKey,
+		numBytesToRead,
+		ADDR byteRead,
+		0
+	INVOKE ReadFile,
+		settingFileHandle,
+		ADDR operationIndexes,
+		numBytesToRead,
+		ADDR byteRead,
+		0
+		
+	ret
+LoadFromFile ENDP
+
+JudgeTrack      proc  uses ebx, xDiff: DWORD, yDiff: DWORD
+                local xChange: DWORD, yChange: DWORD
+                
+                .if xDiff < 80000000h
+                        mov eax, xDiff
+                        mov xChange, eax
+                .else
+                        mov eax, xDiff
+                        neg eax
+                        mov xChange, eax
+                .endif
+                .if yDiff < 80000000h
+                        mov eax, yDiff
+                        mov yChange, eax
+                .else
+                        mov eax, yDiff
+                        neg eax
+                        mov yChange, eax
+                .endif
+                mov eax, xChange
+                sal eax, 1
+                mov ebx, yChange
+                sal ebx, 1
+                .if yChange < eax && xChange < ebx
+                        .if xDiff < 80000000h && yDiff < 80000000h 
+                                mov eax, GestureRightDown
+                        .elseif xDiff < 80000000h
+                                mov eax, GestureRightUp
+                        .elseif yDiff < 80000000h
+                                mov eax, GestureLeftDown
+                        .else
+                                mov eax, GestureLeftUp
+                        .endif
+                .elseif xChange >= ebx
+                        .if xDiff < 80000000h
+                                mov eax, GestureRight
+                        .else 
+                                mov eax, GestureLeft
+                        .endif
+                .else
+                        .if yDiff < 80000000h
+                                mov eax, GestureDown
+                        .else 
+                                mov eax, GestureUp
+                        .endif
+                .endif
+                ret
+JudgeTrack      endp
+
+MouseProc       proc    uses ebx esi edx, nCode: DWORD, wParam: DWORD, lParam: DWORD
+                local   x: DWORD, y: DWORD, hDC:DWORD, hPen:DWORD, hPenOld:DWORD
+
+                .if     nCode < 80000000h
+
+                        .if wParam == WM_RBUTTONDOWN
+                                mov tracking, 1
+                        .elseif wParam == WM_RBUTTONUP
+                                mov tracking, 2
+                        .else
+                                mov tracking, 0
+
+                        .endif
+                        mov esi, lParam
+                        assume esi: PTR MOUSEHOOKSTRUCT
+                        push eax
+                        mov eax, [esi].pt.x
+                        mov x, eax
+                        mov eax, [esi].pt.y
+                        mov y, eax
+                        pop eax
+                        assume esi: nothing
+                        .if tracking == 1 && trackNum != -1
+                                .if oldX != -1
+                                        ; draw trace
+                                        invoke GetDC, hDesktop
+                                        mov hDC, eax
+                                        push eax
+                                        RGB 255,0,255
+                                        movzx edx, ax
+                                        pop eax
+                                        invoke CreatePen, PS_SOLID, 3, edx
+                                        mov DWORD PTR hPen, eax
+                                        invoke SelectObject, DWORD PTR hDC, DWORD PTR hPen
+                                        mov DWORD PTR hPenOld, eax
+                                        invoke MoveToEx, DWORD PTR hDC, oldX, oldY, 0
+                                        invoke LineTo, DWORD PTR hDC, x, y
+                                        invoke SelectObject, DWORD PTR hDC, DWORD PTR hPenOld
+                                        invoke DeleteObject, DWORD PTR hPen
+                                        invoke ReleaseDC, hDesktop, DWORD PTR hDC
+                                        ; print text
+                                        .if     tracking == 2 && trackNum != -1 && trackNum < numOperations
+                                                mov     eax, lastTrack
+                                                mov     ebx, 4
+                                                mul     ebx
+                                                mov     eax, operationIndexes[eax]
+                                                mul     ebx
+                                                invoke SendMessage, lParam, CB_GETLBTEXT, eax, offset ListItem
+                                                invoke crt_sprintf, OFFSET MsgText, OFFSET showOperation, OFFSET ListItem
+                                                invoke crt_strlen, OFFSET MsgText
+                                                invoke TextOut, hDC, 300, 300, OFFSET MsgText, eax
+                                        .endif
+                                .endif
+                                mov eax, x
+                                sub eax, lastX
+                                mov edx, eax
+                                imul edx
+                                mov esi, eax
+                                mov eax, y
+                                sub eax, lastY
+                                mov edx, eax
+                                imul edx
+                                add esi, eax
+                                .if esi > 10000 && esi < 80000000h
+                                        mov ebx, x
+                                        sub ebx, lastX
+                                        mov edx, y
+                                        sub edx, lastY
+                                        invoke JudgeTrack, ebx, edx
+                                        .if eax != lastTrack
+                                                push eax
+                                                mov eax, trackNum
+                                                mov esi, 4
+                                                mul esi
+                                                pop esi
+                                                mov tracks[eax], esi
+                                                mov lastTrack, esi
+                                                inc trackNum
+                                                .if trackNum > 3 && trackNum < 80000000h
+                                                        mov trackNum, -1
+                                                        mov lastTrack, -1
+                                                .endif
+                                        .endif
+                                        mov eax, x
+                                        mov lastX, eax
+                                        mov eax, y
+                                        mov lastY, eax
+                                .endif
+                        .endif
+                        .if     tracking == 2 && trackNum != -1 && trackNum < numOperations
+                                mov     eax, lastTrack
+                                mov     ebx, 4
+                                mul     ebx
+                                mov     eax, operationIndexes[eax]
+								push	eax
+                                mul     ebx
+                                call    ActionList[eax]
+								pop		eax
+								invoke	crt_sprintf, OFFSET data, OFFSET trackans, lastTrack, eax
+								invoke  MessageBox, hgWindow, OFFSET data, OFFSET data, MB_OK
+                        .endif
+                        mov eax, x
+                        mov oldX, eax
+                        mov eax, y
+                        mov oldY, eax             
+                .endif
+                invoke  CallNextHookEx, keyHook, nCode, wParam, lParam
+                ;mov eax, 1
+                ret
+MouseProc       endp
+
+KeyboardProc2   proc    uses ebx edx, nCode: DWORD, wParam: DWORD, lParam: DWORD
+                local   p: PTR KBDLLHOOKSTRUCT, dataIndex: DWORD, pressed: DWORD, nowKeyInputIndexTimes4: DWORD
+
+                mov     eax, lParam
+                mov     p, eax
+                mov     pressed, 0
+                
+                .if     nCode < 80000000h && nowKeyInputIndex != -1 && wParam == WM_KEYDOWN
+                        mov     edx, p
+                        assume  edx: ptr KBDLLHOOKSTRUCT
+                        mov     eax, [edx].vkCode
+                        and     eax, 255
+                        assume  edx: nothing
+                        mov     pressed, eax
+                        
+                        mov     eax, nowKeyInputIndex
+                        mov     ebx, 4
+                        mul     ebx
+                        mov     nowKeyInputIndexTimes4, eax
+                        mov     operationKey[eax], 0
+                        mov     dataIndex, 0
+                
+                        invoke  GetKeyState, VK_CONTROL
+                        .if     ah || pressed == VK_CONTROL
+                                mov     eax, nowKeyInputIndexTimes4
+                                mov     eax, operationKey[eax]
+                                or      eax, CONTROL_ADDER
+                                mov     ebx, nowKeyInputIndexTimes4
+                                mov     operationKey[ebx], eax
+                                mov     eax, OFFSET data
+                                add     eax, dataIndex
+                                invoke  crt_sprintf, eax, OFFSET CtrlPlus
+                                mov     eax, dataIndex
+                                add     eax, 5
+                                mov     dataIndex, eax
+                                .if     pressed == VK_CONTROL
+                                        mov     pressed, 0
+                                .endif
+                        .endif
+
+                        invoke  GetKeyState, VK_MENU
+                        .if     ah || pressed == VK_MENU
+                                mov     eax, nowKeyInputIndexTimes4
+                                mov     eax, operationKey[eax]
+                                or      eax, ALT_ADDER
+                                mov     ebx, nowKeyInputIndexTimes4
+                                mov     operationKey[ebx], eax
+                                mov     eax, OFFSET data
+                                add     eax, dataIndex
+                                invoke  crt_sprintf, eax, OFFSET AltPlus
+                                mov     eax, dataIndex
+                                add     eax, 4
+                                mov     dataIndex, eax
+                                .if     pressed == VK_MENU
+                                        mov     pressed, 0
+                                .endif
+                        .endif
+
+                        invoke  GetKeyState, VK_SHIFT
+                        .if     ah || pressed == VK_SHIFT
+                                mov     eax, nowKeyInputIndexTimes4
+                                mov     eax, operationKey[eax]
+                                or      eax, SHIFT_ADDER
+                                mov     ebx, nowKeyInputIndexTimes4
+                                mov     operationKey[ebx], eax
+                                mov     eax, OFFSET data
+                                add     eax, dataIndex
+                                invoke  crt_sprintf, eax, OFFSET ShiftPlus
+                                mov     eax, dataIndex
+                                add     eax, 6
+                                mov     dataIndex, eax
+                                .if     pressed == VK_SHIFT
+                                        mov     pressed, 0
+                                .endif
+                        .endif
+
+                        invoke  GetKeyState, VK_LWIN
+                        .if     ah || pressed == VK_LWIN
+                                mov     eax, nowKeyInputIndexTimes4
+                                mov     eax, operationKey[eax]
+                                or      eax, LWIN_ADDER
+                                mov     ebx, nowKeyInputIndexTimes4
+                                mov     operationKey[ebx], eax
+                                mov     eax, OFFSET data
+                                add     eax, dataIndex
+                                invoke  crt_sprintf, eax, OFFSET WinPlus
+                                mov     eax, dataIndex
+                                add     eax, 4
+                                mov     dataIndex, eax
+                                .if     pressed == VK_LWIN
+                                        mov     pressed, 0
+                                .endif
+                        .endif
+
+                        invoke  GetKeyState, VK_RWIN
+                        .if     ah || pressed == VK_RWIN
+                                mov     eax, nowKeyInputIndexTimes4
+                                mov     eax, operationKey[eax]
+                                or      eax, RWIN_ADDER
+                                mov     ebx, nowKeyInputIndexTimes4
+                                mov     operationKey[ebx], eax
+                                mov     eax, OFFSET data
+                                add     eax, dataIndex
+                                invoke  crt_sprintf, eax, OFFSET WinPlus
+                                mov     eax, dataIndex
+                                add     eax, 6
+                                mov     dataIndex, eax
+                                .if     pressed == VK_RWIN
+                                        mov     pressed, 0
+                                .endif
+                        .endif
+
+                        .if (pressed >= 'A' && pressed <= 'Z') || (pressed >= '0' && pressed <= '9')
+                                mov     eax, OFFSET data
+                                add     eax, dataIndex
+                                invoke  crt_sprintf, eax, OFFSET CharOut, pressed
+                        .elseif pressed >= 60h && pressed <= 69h
+                                mov     eax, OFFSET data
+                                add     eax, dataIndex
+                                mov     ebx, pressed
+                                sub     ebx, 60h
+                                invoke  crt_sprintf, eax, OFFSET IntOut, ebx
+                        .elseif pressed >= 70h && pressed <= 87h
+                                mov     eax, OFFSET data
+                                add     eax, dataIndex
+                                mov     ebx, pressed
+                                sub     ebx, 6Fh
+                                invoke  crt_sprintf, eax, OFFSET FKeyOut, ebx
+                        .elseif pressed == VK_INSERT
+                                mov     eax, OFFSET data
+                                add     eax, dataIndex
+                                invoke  crt_sprintf, eax, OFFSET InsertKey
+                        .elseif pressed == VK_PRIOR
+                                mov     eax, OFFSET data
+                                add     eax, dataIndex
+                                invoke  crt_sprintf, eax, OFFSET PageUpKey
+                        .elseif pressed == VK_NEXT
+                                mov     eax, OFFSET data
+                                add     eax, dataIndex
+                                invoke  crt_sprintf, eax, OFFSET PageDownKey
+                        .elseif pressed == VK_LEFT
+                                mov     eax, OFFSET data
+                                add     eax, dataIndex
+                                invoke  crt_sprintf, eax, OFFSET LeftKey
+                        .elseif pressed == VK_RIGHT
+                                mov     eax, OFFSET data
+                                add     eax, dataIndex
+                                invoke  crt_sprintf, eax, OFFSET RightKey
+                        .elseif pressed == VK_UP
+                                mov     eax, OFFSET data
+                                add     eax, dataIndex
+                                invoke  crt_sprintf, eax, OFFSET UpKey
+                        .elseif pressed == VK_DOWN
+                                mov     eax, OFFSET data
+                                add     eax, dataIndex
+                                invoke  crt_sprintf, eax, OFFSET DownKey
+                        .elseif pressed == VK_INSERT
+                                mov     eax, OFFSET data
+                                add     eax, dataIndex
+                                invoke  crt_sprintf, eax, OFFSET InsertKey
+                        .elseif pressed == VK_ESCAPE
+                                mov     eax, OFFSET data
+                                add     eax, dataIndex
+                                invoke  crt_sprintf, eax, OFFSET EscKey
+                        .elseif pressed == VK_SPACE
+                                mov     eax, OFFSET data
+                                add     eax, dataIndex
+                                invoke  crt_sprintf, eax, OFFSET SpaceKey
+                        .elseif pressed == VK_RETURN
+                                mov     eax, OFFSET data
+                                add     eax, dataIndex
+                                invoke  crt_sprintf, eax, OFFSET ReturnKey
+                        .elseif pressed == VK_TAB
+                                mov     eax, OFFSET data
+                                add     eax, dataIndex
+                                invoke  crt_sprintf, eax, OFFSET TabKey
+                        .elseif pressed == VK_BACK
+                                mov     eax, OFFSET data
+                                add     eax, dataIndex
+                                invoke  crt_sprintf, eax, OFFSET BackSpaceKey
+                        .elseif pressed == VK_DELETE
+                                mov     eax, OFFSET data
+                                add     eax, dataIndex
+                                invoke  crt_sprintf, eax, OFFSET DeleteKey
+                        .else
+                                mov     pressed, 0
+                                mov     eax, OFFSET data
+                                add     eax, dataIndex
+                                dec     eax
+                                invoke  crt_sprintf, eax, OFFSET nullText
+                        .endif
+
+                        mov     ebx, nowKeyInputIndexTimes4
+                        mov     eax, operationKey[ebx]
+                        or      eax, pressed
+                        mov     operationKey[ebx], eax
+                        mov     eax, nowKeyInputIndexTimes4
+                        mov     edx, hWndComboBox[eax]
+                        push    edx
+                        invoke  SendMessage, edx, CB_DELETESTRING, numOperations - 1, 0
+                        pop     edx
+                        push    edx
+                        invoke  SendMessage, edx, CB_ADDSTRING, 0, OFFSET data
+                        mov     eax, nowKeyInputIndexTimes4
+                        mov     operationIndexes[eax], numOperations - 1
+                        pop     edx
+                        push    edx
+                        invoke  SendMessage, edx, CB_SETCURSEL, numOperations - 1, 0
+                        pop     edx
+
+                        .if     pressed != 0
+                                mov     eax, 1
+                                ret
+                        .endif
+                .endif
+
+
+                invoke  CallNextHookEx, keyHook, nCode, wParam, lParam
+                mov     eax, 0
+                ret
+KeyboardProc2   endp
+
+_ProcWinMain    proc    uses ebx edx, hWnd, uMsg, wParam, lParam
                 local   wmId: WORD
                 local   wmEvent: WORD
+                local   ItemIndex: DWORD
                 lea     eax, wParam
                 mov     bx, WORD PTR[eax]
                 mov     wmId, bx
@@ -111,27 +1040,99 @@ _ProcWinMain    proc    uses ebx, hWnd, uMsg, wParam, lParam
                         invoke     PostQuitMessage,NULL
                 .else
                         .if     eax == WM_COMMAND
-                                .if     wmId == buttonHMenu && wmEvent == BN_CLICKED
-                                        mov     al, clickTestText[4]
-                                        inc     al
-                                        .if     al > '9'
-                                                mov     al, '0'
+                                .if     wmId >= buttonHMenuBase && wmId < buttonHMenuBase + numGestures && wmEvent == BN_CLICKED
+                                        SET_INPUT_TEXT:
+                                        movzx   eax, wmId
+                                        sub     eax, buttonHMenuBase
+                                        .if     nowKeyInputIndex != -1 && eax != nowKeyInputIndex
+                                                invoke  MessageBox, hWnd, OFFSET cannotMsgText, OFFSET cannotMsgTitle, MB_OK
+                                                mov     eax, 0
+                                                ret
                                         .endif
-                                        mov     clickTestText[4], al
-                                        invoke  SetWindowText, saveButton, OFFSET clickTestText;
+                                        .if     keyHooked == 0
+                                                mov     keyHooked, 1
+                                                movzx   eax, wmId
+                                                sub     eax, buttonHMenuBase
+                                                mov     nowKeyInputIndex, eax
+                                                mov     ebx, 4
+                                                mul     ebx
+                                                ; push nowKeyInputIndex * 4
+                                                push    eax
+                                                mov     operationKey[eax], 0
+                                                invoke  SetWindowsHookEx, WH_KEYBOARD_LL, KeyboardProc2, ghInstance, 0
+                                                mov     keyHook, eax
+                                                pop     eax
+                                                push    eax
+                                                add     eax, OFFSET saveButton
+                                                invoke  SetWindowText, [eax], OFFSET confirmText
+                                                pop     eax
+                                                push    eax
+                                                push    eax
+                                                invoke  SendMessage, hWndComboBox[eax], CB_DELETESTRING, numOperations - 1, 0
+                                                pop     eax
+                                                invoke  SendMessage, hWndComboBox[eax], CB_ADDSTRING, 0, OFFSET inputedString
+                                                pop     eax
+                                                push    eax
+                                                mov     operationIndexes[eax], numOperations - 1
+                                                invoke  SendMessage, hWndComboBox[eax], CB_SETCURSEL, operationIndexes[eax], 0
+                                        .else
+                                                mov     keyHooked, 0
+                                                invoke  UnhookWindowsHookEx, keyHook
+                                                mov     eax, nowKeyInputIndex
+                                                mov     ebx, 4
+                                                mul     ebx
+                                                push    eax
+                                                invoke  SetWindowText, saveButton[eax], OFFSET buttonText
+                                                pop     eax
+                                                mov     ebx, numOperations - 1
+                                                mov     operationIndexes[eax], ebx
+                                                invoke  SendMessage, hWndComboBox[eax], CB_SETCURSEL, operationIndexes[eax], 0
+                                                mov     nowKeyInputIndex, -1
+                                        .endif
                                         mov     eax, 0
                                         ret
                                 .elseif wmId >= comboHMenuBase && wmId < comboHMenuBase + numGestures && wmEvent == CBN_SELCHANGE
                                         invoke  SendMessage, lParam, CB_GETCURSEL, 0, 0
-                                        mov     ebx, eax
-                                        invoke  SendMessage, lParam, CB_GETLBTEXT, ebx, OFFSET ListItem
-                                        invoke  MessageBox, hWnd, OFFSET ListItem, OFFSET buttonText, MB_OK
+                                        mov     ItemIndex, eax
+                                        movzx   eax, wmId
+                                        sub     eax, comboHMenuBase
+                                        push    eax
+                                        invoke  crt_sprintf, OFFSET MsgTitle, OFFSET itemSelected, ItemIndex, ax
+                                        pop     eax
+                                        mov     ebx, ItemIndex
+                                        mov     edx, 4
+                                        mul     edx
+                                        push    eax
+                                        mov     operationIndexes[eax], ebx
+                                        movzx   edx, wmId
+                                        sub     edx, comboHMenuBase
+                                        .if     ItemIndex == numOperations - 1 && edx != nowKeyInputIndex && operationKey[eax] == 0
+                                                mov     ax, wmId
+                                                sub     ax, comboHMenuBase
+                                                add     ax, buttonHMenuBase
+                                                mov     wmId, ax
+                                                jmp     SET_INPUT_TEXT
+                                        .elseif ItemIndex != numOperations - 1 || nowKeyInputIndex < 0
+                                                invoke  SendMessage, lParam, CB_GETLBTEXT, ebx, OFFSET ListItem
+                                                pop     eax
+                                                invoke  crt_sprintf, OFFSET MsgText, OFFSET selectedDetail, GestureNames[eax], OFFSET ListItem
+                                                invoke  MessageBox, hWnd, OFFSET MsgText, OFFSET MsgTitle, MB_OK
+                                        .endif
                                         mov     eax, 0
                                         ret
                                 .endif
+								
+								.if wParam == IDM_OPEN
+										invoke LoadFromFile
+										invoke  UpdateWindow, hWnd
+										ret
+								.elseif wParam == IDM_SAVE
+										invoke WriteToFile
+										ret
+								.endif
                         .endif
                         invoke  DefWindowProc,hWnd,uMsg,wParam,lParam
-						ret
+                        ret
                 .endif
                 mov     eax, 0
                 ret
@@ -144,11 +1145,15 @@ _WinMain        proc    uses ebx esi
                 local   hWinMain: DWORD
                 local   wc: WNDCLASSEX
                 local   Msg: MSG
-                local   hWndComboBox: DWORD
+                local   comboYPos: DWORD
+                local   iMulti4: DWORD ; record i * 4
 
                 invoke  GetModuleHandle,NULL
                 mov     hInstance,eax
                 invoke  RtlZeroMemory,addr wc, sizeof wc
+
+                invoke  GetDesktopWindow
+                mov     hDesktop, eax
 
                 mov     wc.cbSize, sizeof WNDCLASSEX
                 mov     wc.style, 0
@@ -161,7 +1166,7 @@ _WinMain        proc    uses ebx esi
                 mov     wc.hIcon, eax
                 invoke  LoadCursor,0,IDC_ARROW
                 mov     wc.hCursor,eax
-                mov     wc.hbrBackground,COLOR_WINDOW + 1
+                mov     wc.hbrBackground, COLOR_WINDOW + 1
                 mov     wc.lpszMenuName, NULL
                 mov     wc.lpszClassName, offset windowClassName
                 invoke  LoadIcon, NULL, IDI_APPLICATION
@@ -187,6 +1192,16 @@ _WinMain        proc    uses ebx esi
                         mov     eax, 0
                         ret
                 .endif
+				
+				; initialize menu
+				invoke CreateMenu
+				mov hMenu, eax
+				invoke CreateMenu
+				mov hSubMenu, eax
+				invoke AppendMenu, hSubMenu, MF_STRING, IDM_OPEN, ADDR openItemName
+				invoke AppendMenu, hSubMenu, MF_STRING, IDM_SAVE, ADDR saveItemName
+				invoke AppendMenu, hMenu, MF_POPUP, hSubMenu, ADDR subMenuName
+				invoke SetMenu, hWinMain, hMenu
 
                 push    hWinMain
                 pop     hgWindow
@@ -194,75 +1209,75 @@ _WinMain        proc    uses ebx esi
                 invoke  ShowWindow, hWinMain, SW_SHOWNORMAL
                 invoke  UpdateWindow,hWinMain
 
-				mov ebx, WS_CHILD
-				or ebx, WS_VISIBLE
-				invoke  CreateWindowEx, 0, offset buttonTypeName, offset buttonText, ebx, buttonPosX, buttonPosY, buttonWidth, buttonHeight, hWinMain, buttonHMenu, hInstance, 0
-                mov     saveButton, eax
+                ; set mouse hook
+                invoke  SetWindowsHookEx, WH_MOUSE_LL, MouseProc, hInstance, 0
+                mov     mouseHook, eax
 
                 mov     ecx, numGestures
                 mov     esi, 0
-                mov     edx, comboBaseYPos
-                mov     edi, comboHMenuBase
+                mov     eax, comboBaseYPos
+                mov     comboYPos, eax
                 CREATEITEMS:
-                        push    ecx
-                        push    esi
+                        push    ecx ; 1.ecx
+                        push    esi ; 2.esi
                         mov     ebx, CBS_DROPDOWNLIST
                         or      ebx, CBS_HASSTRINGS
                         or      ebx, WS_CHILD
                         or      ebx, WS_OVERLAPPED
                         or      ebx, WS_VISIBLE
-                        push    edx
-                        invoke  CreateWindowEx, 0, OFFSET comboTypeName, OFFSET nullText, ebx,
-                                    comboBaseXPos, edx, comboWidth, comboHeight, hWinMain, edi, hInstance, NULL
-                        mov     hWndComboBox, eax
 
-                        mov     ebx, WS_CHILD
-                        or      ebx, WS_VISIBLE
+                        ; Calculate i * 4
                         mov     eax, esi
                         mov     ecx, 4
                         mul     ecx
-                        mov     eax, GestureNames[eax]
-                        pop     edx
+                        mov     iMulti4, eax
+                        
+                        mov     edi, esi
+                        add     edi, comboHMenuBase
+                        invoke  CreateWindowEx, 0, OFFSET comboTypeName, OFFSET nullText, ebx,
+                                    comboBaseXPos, comboYPos, comboWidth, comboHeight, hWinMain, edi, hInstance, NULL
+                        mov     ebx, iMulti4
+                        mov     hWndComboBox[ebx], eax
+
+                        mov     ebx, WS_CHILD
+                        or      ebx, WS_VISIBLE
+                        mov     eax, iMulti4
+                        mov     edx, comboYPos
                         add     edx, 5
-                        push    edx
-                        invoke  CreateWindowEx, 0, OFFSET staticTypeName, eax, ebx, comboBaseXPos - 60, edx, 50, 20, hWinMain, NULL, hInstance, NULL
-                        inc     edi
+                        invoke  CreateWindowEx, 0, OFFSET staticTypeName, GestureNames[eax], ebx, comboBaseXPos - 60, edx, 50, 20, hWinMain, NULL, hInstance, NULL
+                        
+                        mov     edx, comboYPos
+                        mov     ebx, WS_CHILD
+                        or      ebx, WS_VISIBLE
+                        mov     edi, esi
+                        add     edi, buttonHMenuBase
+                        invoke  CreateWindowEx, 0, offset buttonTypeName, offset buttonText, ebx, buttonBaseXPos, edx, buttonWidth, buttonHeight, hWinMain, edi, hInstance, 0
+                        mov     ebx, iMulti4
+                        mov     saveButton[ebx], eax
 
                         mov     ecx, numOperations
                         mov     esi, 0
                         OperationsListSet:
-                                push    ecx
-                                mov     ebx, Planets[esi]
-                                mov     edx, OFFSET ListItem
-                                CopyStr:
-                                        mov     al, [ebx]
-                                        mov     [edx], al
-                                        inc     ebx
-                                        inc     edx
-                                        cmp     al, 0
-                                        jne     CopyStr
+                                push    ecx ; push 3.inner ecx
+                                invoke  crt_sprintf, OFFSET ListItem, Planets[esi]
                                 ; Add string to combobox.
-                                INVOKE  SendMessage, hWndComboBox, CB_ADDSTRING, 0, OFFSET ListItem
-                                pop     ecx
+                                mov     eax, iMulti4
+                                invoke  SendMessage, hWndComboBox[eax], CB_ADDSTRING, 0, OFFSET ListItem
+                                pop     ecx ; pop 3.inner ecx
                                 add     esi, 4
                                 loop    OperationsListSet
 
                         ; Send the CB_SETCURSEL message to display an initial item 
                         ;  in the selection field  
-                        pop     edx
-                        pop     esi
-                        push    esi
-                        push    edx
-                        mov     eax, esi
-                        mov     ebx, 4
-                        mul     ebx
-                        INVOKE  SendMessage, hWndComboBox, CB_SETCURSEL, operationIndexes[eax], 0
+                        mov     eax, iMulti4
+                        invoke  SendMessage, hWndComboBox[eax], CB_SETCURSEL, operationIndexes[eax], 0
 
-                        pop     edx
-                        add     edx, settingAdder - 5
-                        pop     esi
+                        pop     esi ; pop 2.esi
                         inc     esi
-                        pop     ecx
+                        pop     ecx ; pop 1.ecx
+                        mov     eax, comboYPos
+                        add     eax, settingAdder
+                        mov     comboYPos, eax
                         dec     ecx
                         jne     CREATEITEMS
 
@@ -276,6 +1291,6 @@ _WinMain        proc    uses ebx esi
 _WinMain        endp
 
 start:
-                call	_WinMain
-                invoke	ExitProcess, NULL
-                end		start
+                call    _WinMain
+                invoke  ExitProcess, NULL
+                end     start
